@@ -1,0 +1,159 @@
+version: 2.1
+
+orbs:
+  aws-eks: sandbox/aws-eks@dev:alpha
+  aws-ecr: circleci/aws-ecr@3.1.0
+  kubernetes: circleci/kubernetes@0.2.0
+
+jobs:
+  deploy-application:
+    executor: aws-eks/python3
+    parameters:
+      cluster-name:
+        description: |
+          Name of the EKS cluster
+        type: string
+      docker-image-name:
+        description: |
+          Name of the docker image to be deployed
+        type: string
+      version-info:
+        description: |
+          App version information
+        type: string
+      aws-region:
+        description: |
+          AWS region
+        type: string
+        default: ""
+    steps:
+      - checkout
+      - run:
+          name: Create deployment manifest
+          command: |
+            # Replace the placeholders in the manifest with the intended values.
+            # This is to avoid hardcoding the image name in the manifest, to make this
+            # demo project more portable.
+            BUILD_DATE=$(date '+%Y%m%d%H%M%S')
+            cat deployment/demo-app-deployment.yaml.template |\
+               sed "s|DOCKER_IMAGE_NAME|<< parameters.docker-image-name >>|\
+                g;s|BUILD_DATE_VALUE|$BUILD_DATE|g;s|VERSION_INFO_VALUE|\
+                << parameters.version-info >>|g" > deployment/demo-app-deployment.yaml
+      - aws-eks/create-or-update-resource:
+          resource-file-path: "deployment/demo-app-deployment.yaml"
+          cluster-name: << parameters.cluster-name >>
+          get-rollout-status: true
+          resource-name: deployment/demoapp
+          update-kubeconfig-with-authenticator: true
+          install-kubectl: true
+          aws-region: << parameters.aws-region >>
+      - aws-eks/create-or-update-resource:
+          resource-file-path: "deployment/demo-app-service.yaml"
+          cluster-name: << parameters.cluster-name >>
+  test-application:
+    executor: aws-eks/python3
+    parameters:
+      cluster-name:
+        description: |
+          Name of the EKS cluster
+        type: string
+      aws-region:
+        description: |
+          AWS region
+        type: string
+        default: ""
+      expected-version-info:
+        description: |
+          Expected app version (this is used for testing that the
+          correct version has been deployed)
+        type: string
+    steps:
+      - aws-eks/update-kubeconfig-with-authenticator:
+          cluster-name: << parameters.cluster-name >>
+          install-kubectl: true
+          aws-region: << parameters.aws-region >>
+      - run:
+          name: Wait for service to be ready
+          command: |
+            kubectl get pods
+            kubectl get services
+            sleep 30
+            for attempt in {1..20}; do
+              EXTERNAL_IP=$(kubectl get service demoapp | awk '{print $4}' | tail -n1)
+              echo "Checking external IP: ${EXTERNAL_IP}"
+              if [ -n "${EXTERNAL_IP}" ] && [ -z $(echo "${EXTERNAL_IP}" | grep "pending") ]; then
+                break
+              fi
+              echo "Waiting for external IP to be ready: ${EXTERNAL_IP}"
+              sleep 10
+            done
+            sleep 180
+            curl -s --retry 10 "http://$EXTERNAL_IP" | grep "<< parameters.expected-version-info >>"
+  undeploy-application:
+    executor: aws-eks/python3
+    parameters:
+      cluster-name:
+        description: |
+          Name of the EKS cluster
+        type: string
+      aws-region:
+        description: |
+          AWS region
+        type: string
+        default: ""
+    steps:
+      - aws-eks/delete-resource:
+          resource-types: "deployment,service"
+          label-selector: "app=demo"
+          cluster-name: << parameters.cluster-name >>
+          wait: true
+          update-kubeconfig-with-authenticator: true
+          install-kubectl: true
+          aws-region: << parameters.aws-region >>
+      - run:
+          name: Check on pod status
+          command: |
+            kubectl get pods
+workflows:
+  deployment:
+    jobs:
+      - aws-ecr/build_and_push_image:
+          name: build-and-push-image
+          account-url: AWS_ECR_URL
+          region: AWS_DEFAULT_REGION
+          repo: eks_orb_demo_app
+          dockerfile: ~/project/demo_app/Dockerfile
+          path: ~/project/demo_app
+          tag: ${CIRCLE_SHA1}
+          # Uncomment if the repository does not yet exist
+          create-repo: true
+      - aws-eks/create-cluster:
+          cluster-name: eks-orb-demo-app-deployment
+          aws-region: $AWS_DEFAULT_REGION
+          requires:
+            - build-and-push-image
+      - deploy-application:
+          cluster-name: eks-orb-demo-app-deployment
+          aws-region: $AWS_DEFAULT_REGION
+          docker-image-name: "${AWS_ECR_URL}/eks_orb_demo_app:${CIRCLE_SHA1}"
+          version-info: "${CIRCLE_SHA1}"
+          requires:
+            - aws-eks/create-cluster
+      - test-application:
+          name: test-application
+          cluster-name: eks-orb-demo-app-deployment
+          aws-region: $AWS_DEFAULT_REGION
+          expected-version-info: "${CIRCLE_SHA1}"
+          requires:
+            - aws-eks/create-cluster
+      - undeploy-application:
+          cluster-name: eks-orb-demo-app-deployment
+          aws-region: $AWS_DEFAULT_REGION
+          requires:
+            - test-application
+      - aws-eks/delete-cluster:
+          cluster-name: eks-orb-demo-app-deployment
+          aws-region: $AWS_DEFAULT_REGION
+          wait: true
+          requires:
+            - undeploy-application
