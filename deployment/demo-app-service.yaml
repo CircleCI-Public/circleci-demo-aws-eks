@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: demoapp
+  labels:
+    app: demo
+spec:
+  # automatically create an external load-balanced IP for the service.
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 8080
+    protocol: TCP
+  selector:
+    app: demo
