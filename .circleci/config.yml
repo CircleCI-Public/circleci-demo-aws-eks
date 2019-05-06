@@ -1,9 +1,9 @@
 version: 2.1
 
 orbs:
-  aws-eks: circleci/aws-eks@dev:alpha
+  aws-eks: circleci/aws-eks@0.1.0
   aws-ecr: circleci/aws-ecr@3.1.0
-  kubernetes: circleci/kubernetes@0.2.0
+  kubernetes: circleci/kubernetes@0.3.0
 
 jobs:
   deploy-application:
@@ -39,17 +39,16 @@ jobs:
                sed "s|DOCKER_IMAGE_NAME|<< parameters.docker-image-name >>|\
                 g;s|BUILD_DATE_VALUE|$BUILD_DATE|g;s|VERSION_INFO_VALUE|\
                 << parameters.version-info >>|g" > deployment/demo-app-deployment.yaml
-      - aws-eks/create-or-update-resource:
-          resource-file-path: "deployment/demo-app-deployment.yaml"
+      - aws-eks/update-kubeconfig-with-authenticator:
           cluster-name: << parameters.cluster-name >>
-          get-rollout-status: true
-          resource-name: deployment/demoapp
-          update-kubeconfig-with-authenticator: true
           install-kubectl: true
           aws-region: << parameters.aws-region >>
-      - aws-eks/create-or-update-resource:
+      - kubernetes/create-or-update-resource:
+          resource-file-path: "deployment/demo-app-deployment.yaml"
+          get-rollout-status: true
+          resource-name: deployment/demoapp
+      - kubernetes/create-or-update-resource:
           resource-file-path: "deployment/demo-app-service.yaml"
-          cluster-name: << parameters.cluster-name >>
   test-application:
     executor: aws-eks/python3
     parameters:
@@ -102,14 +101,14 @@ jobs:
         type: string
         default: ""
     steps:
-      - aws-eks/delete-resource:
-          resource-types: "deployment,service"
-          label-selector: "app=demo"
+      - aws-eks/update-kubeconfig-with-authenticator:
           cluster-name: << parameters.cluster-name >>
-          wait: true
-          update-kubeconfig-with-authenticator: true
           install-kubectl: true
           aws-region: << parameters.aws-region >>
+      - kubernetes/delete-resource:
+          resource-types: "deployment,service"
+          label-selector: "app=demo"
+          wait: true
       - run:
           name: Check on pod status
           command: |
