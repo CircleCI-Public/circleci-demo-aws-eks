@@ -4,7 +4,7 @@ ADD src /src
 RUN cd /src && go build -o demo-app main.go
 
 # final stage
-FROM alpine
+FROM alpine:3.15
 WORKDIR /app
 COPY --from=build-env /src/demo-app /app/
 EXPOSE 8080
