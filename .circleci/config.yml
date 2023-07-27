@@ -4,6 +4,7 @@ orbs:
   aws-eks: circleci/aws-eks@0.2.0
   aws-ecr: circleci/aws-ecr@3.1.0
   kubernetes: circleci/kubernetes@0.3.0
+  snyk: snyk/snyk@1.4.0
 
 jobs:
   deploy-application:
@@ -113,6 +114,40 @@ jobs:
           name: Check on pod status
           command: |
             kubectl get pods
+  vulnerability-scan:
+    executor: go
+    steps:
+      - checkout
+      - run:
+          name: Setup Scanning
+          command: |
+              git config --global url."https://$GITHUB_USER:$GITHUB_TOKEN@github.com/circleci/".insteadOf "https://github.com/circleci/"
+      - when:
+          condition:
+              or:
+                - equal: [ master, << pipeline.git.branch >> ]
+          steps:
+              - run:
+                  name: Launching Snyk Orb Scanning
+                  command: echo "Running snyk/scan on master; uploading the results"
+              - snyk/scan:
+                  fail-on-issues: false
+                  severity-threshold: high
+                  monitor-on-build: true
+                  project: '${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}'
+      - unless:
+          condition:
+              or:
+                - equal: [ master, << pipeline.git.branch >> ]
+          steps:
+              - run:
+                  name: Launching Snyk Orb Scanning
+                  command: echo "Running snyk/scan on branch; not uploading the results"
+              - snyk/scan:
+                  fail-on-issues: false
+                  severity-threshold: high
+                  monitor-on-build: false
+                  project: '${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}/${CIRCLE_BRANCH}'
 workflows:
   deployment:
     jobs:
@@ -126,6 +161,8 @@ workflows:
           tag: ${CIRCLE_SHA1}
           # Uncomment if the repository does not yet exist
           # create-repo: true
+      - vulnerability-scan:
+          context: org-global-employees
       - aws-eks/create-cluster:
           cluster-name: eks-orb-demo-app-deployment
           aws-region: $AWS_DEFAULT_REGION
