@@ -6,6 +6,13 @@ orbs:
   kubernetes: circleci/kubernetes@0.3.0
   snyk: snyk/snyk@1.7.0
 
+executors:
+  go:
+    docker:
+      - image: cimg/go:1.20
+    environment:
+      CGO_ENABLED: 0
+
 jobs:
   deploy-application:
     executor: aws-eks/python3
